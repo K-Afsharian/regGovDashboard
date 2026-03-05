@@ -18,6 +18,7 @@ interface Docket {
   attributes: {
     title: string;
     docketType: string;
+    lastModifiedDate: string;
   };
 }
 
@@ -291,10 +292,15 @@ function App() {
 
       {dockets.length > 0 && (
         <div id="epa-docket-list">
-          <div className="admin-section-label">Matching Dockets</div>
+          <div className="admin-section-label">Matching Dockets (Recent First)</div>
           {dockets.map(d => (
             <div key={d.id} className={`docket-item ${activeDocket?.id === d.id ? 'active' : ''}`} onClick={() => {setActiveDocket(d); setPage(1);}}>
-              <strong>{d.id}</strong>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                <strong>{d.id}</strong>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                  Updated: {new Date(d.attributes.lastModifiedDate).toLocaleDateString()}
+                </span>
+              </div>
               <div className="docket-title">{d.attributes.title}</div>
             </div>
           ))}
