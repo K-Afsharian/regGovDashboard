@@ -101,7 +101,8 @@ function App() {
         const date = new Date();
         date.setDate(date.getDate() - parseInt(filterDate));
         const dateStr = date.toISOString().split('T')[0];
-        url += `&filter[postedDate]=ge${dateStr}`;
+        url += `&filter[postedDate][ge]=${dateStr}`;
+        addLog(`[i] Applying date filter: Since ${dateStr}`);
       }
 
       const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
