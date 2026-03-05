@@ -184,7 +184,7 @@ function App() {
     setPage(1);
   };
 
-  const triggerDirectDownload = (url: string, label: string) => {
+  const triggerDirectDownload = (url: string) => {
     const link = document.createElement('a');
     link.href = url;
     link.target = '_blank';
@@ -249,15 +249,14 @@ function App() {
                 ok++;
               } catch (err: any) {
                 addLog(`    [!] Proxy fetch failed (${err.message}). Using direct fallback...`);
-                triggerDirectDownload(f.url, f.label);
+                triggerDirectDownload(f.url);
                 addLog(`    [✓] Fallback request sent to browser`);
                 ok++;
-                // Extra delay for fallbacks
                 await new Promise(r => setTimeout(r, 1500)); 
               }
             } else {
               addLog(`    [+] Triggering direct download for ${f.label}.pdf`);
-              triggerDirectDownload(f.url, f.label);
+              triggerDirectDownload(f.url);
               ok++;
               await new Promise(r => setTimeout(r, 1000));
             }
