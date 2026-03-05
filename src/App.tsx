@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import JSZip from 'jszip';
-import { saveAs } from 'file-saver';
 import './App.css';
 
-// Updated interfaces based on OpenAPI spec
+// Interfaces based on Regulations.gov v4 OpenAPI spec
 interface Document {
   id: string;
   attributes: {
@@ -199,12 +197,11 @@ function App() {
     setProgress(0);
     setLogs([]);
     const totalDocs = selectedDocIds.size;
-    addLog(`Starting download of ${totalDocs} selected documents...`);
-    addLog(`[!] NOTE: If triggered, please click 'Allow' to permit multiple file downloads.`);
+    addLog(`Starting download queue for ${totalDocs} documents...`);
+    addLog(`[!] Note: Ensure browser popups are allowed for this site.`);
 
     const ids = Array.from(selectedDocIds);
     let ok = 0, fail = 0;
-    const zip = totalDocs > 1 ? new JSZip() : null;
 
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
@@ -233,54 +230,28 @@ function App() {
         });
 
         if (files.length > 0) {
-          addLog(`  → Found ${files.length} PDF(s).`);
+          addLog(`  → Found ${files.length} PDF(s). Triggering browser downloads...`);
           for (const f of files) {
-            if (zip) {
-              try {
-                addLog(`    [+] Fetching ${f.label}.pdf via proxy...`);
-                const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(f.url)}`;
-                
-                const fileResp = await fetch(proxyUrl);
-                if (!fileResp.ok) throw new Error(`HTTP ${fileResp.status}`);
-                
-                const blob = await fileResp.blob();
-                zip.file(`${f.label}.pdf`, blob);
-                addLog(`    [✓] Added to ZIP bundle`);
-                ok++;
-              } catch (err: any) {
-                addLog(`    [!] Proxy fetch failed (${err.message}). Using direct fallback...`);
-                triggerDirectDownload(f.url);
-                addLog(`    [✓] Fallback request sent to browser`);
-                ok++;
-                await new Promise(r => setTimeout(r, 1500)); 
-              }
-            } else {
-              addLog(`    [+] Triggering direct download for ${f.label}.pdf`);
-              triggerDirectDownload(f.url);
-              ok++;
-              await new Promise(r => setTimeout(r, 1000));
-            }
+            triggerDirectDownload(f.url);
+            addLog(`    [✓] Requested: ${f.label}.pdf`);
+            ok++;
+            // Necessary delay to prevent browser download manager from blocking
+            await new Promise(r => setTimeout(r, 1200));
           }
+        } else {
+          addLog(`  → No PDF files found for this document.`);
         }
       } catch (e: any) {
-        addLog(`  [!] ERROR: ${e.message}`);
+        addLog(`  [!] ERROR fetching ${id}: ${e.message}`);
         fail++;
       }
       setProgress(((i + 1) / ids.length) * 100);
-      await new Promise(r => setTimeout(r, 800)); 
-    }
-
-    if (zip && ok > 0) {
-      addLog("[+] Generating final ZIP file package...");
-      const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, "EPA_Documents.zip");
-      addLog("[✓] ZIP file download triggered");
     }
 
     setIsDownloading(false);
     setProgressStatus('Finished');
     addLog("==================================================");
-    addLog(`  Done.  Processed: ${ok}  |  Failed: ${fail}`);
+    addLog(`  Done.  Files Requested: ${ok}  |  Errors: ${fail}`);
     addLog("==================================================");
   };
 
@@ -296,7 +267,7 @@ function App() {
 
       <div className="panel-hdr">
         <div className="panel-title">EPA Docket Downloader</div>
-        <div className="panel-desc">Advanced Regulations.gov Interface with server-side filtering and comment tracking.</div>
+        <div className="panel-desc">Direct download tool for EPA dockets. Optimized for restricted network connections.</div>
       </div>
 
       {(isDownloading || logs.length > 0) && (
@@ -365,7 +336,7 @@ function App() {
             </div>
 
             <button className="btn-primary" disabled={selectedDocIds.size === 0 || isDownloading} onClick={startDownload}>
-              Download ({selectedDocIds.size})
+              Download Selection ({selectedDocIds.size})
             </button>
           </div>
 
