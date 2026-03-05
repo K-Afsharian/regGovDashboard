@@ -1,73 +1,55 @@
-# React + TypeScript + Vite
+# EPA Docket Downloader (Regulations.gov V4)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A modern, high-performance web dashboard for searching, filtering, and downloading regulatory documents from EPA pesticide dockets via the official Regulations.gov API.
 
-Currently, two official plugins are available:
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)
+![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 🚀 Key Features
 
-## React Compiler
+- **Direct EPA Search**: Instantly resolve pesticide names or exact Docket IDs (e.g., `EPA-HQ-OPP-2007-0469`).
+- **Server-Side Performance**: Utilizes Regulations.gov v4 native pagination, sorting, and filtering for near-instant loading of large dockets.
+- **Advanced Filtering**:
+  - **Document Type**: Supporting & Related Material, Notices, Rules, etc.
+  - **Date Range**: Filter results by Last 30 Days, 90 Days, or 1 Year.
+  - **Status**: Live toggle for "Open For Comment" documents.
+- **Interactive Comment Viewer**: Explore public feedback for specific documents directly within the dashboard.
+- **Direct Download Queue**: Sequential, direct-to-browser downloads optimized for restricted work networks.
+- **Secure Authentication**: API keys are stored only in your local browser's storage, never on a server.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 🛠️ Tech Stack
 
-## Expanding the ESLint configuration
+- **Frontend**: React (TypeScript)
+- **Build Tool**: Vite
+- **Styling**: Vanilla CSS (Modern Slate & Indigo palette)
+- **API**: Regulations.gov V4 OpenAPI
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 🏁 Getting Started
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### Prerequisites
+- Node.js (v18+)
+- A [Regulations.gov API Key](https://open.regulations.gov/api-js/)
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/regGovDashboard.git
+   cd regGovDashboard
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## 📦 Deployment
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+This app is pre-configured for **Vercel**. Simply connect your GitHub repository to Vercel for automatic CI/CD.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 📄 License
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Internal Use / MIT - Developed for EPA Regulatory Data Pipelines.
