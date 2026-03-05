@@ -62,6 +62,9 @@ function App() {
   const [isFetchingDocs, setIsFetchingDocs] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   
+  // Stop Download Flag
+  const stopDownloadRef = React.useRef(false);
+  
   // Comments Feature States
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docComments, setDocComments] = useState<Comment[]>([]);
@@ -184,6 +187,11 @@ function App() {
     setPage(1);
   };
 
+  const stopDownload = () => {
+    stopDownloadRef.current = true;
+    addLog("[!] Stop request received. Terminating queue...");
+  };
+
   const triggerDirectDownload = (url: string) => {
     const link = document.createElement('a');
     link.href = url;
@@ -195,6 +203,7 @@ function App() {
   };
 
   const startDownload = async () => {
+    stopDownloadRef.current = false;
     setIsDownloading(true);
     setProgress(0);
     setLogs([]);
@@ -206,6 +215,10 @@ function App() {
     let ok = 0, fail = 0;
 
     for (let i = 0; i < ids.length; i++) {
+      if (stopDownloadRef.current) {
+        addLog("[!] Download process stopped by user.");
+        break;
+      }
       const id = ids[i];
       setProgressStatus(`Processing ${i + 1}/${ids.length}: ${id}`);
       addLog(`Fetching details for ${id}...`);
@@ -269,7 +282,7 @@ function App() {
 
       <div className="panel-hdr">
         <div className="panel-title">EPA Docket Downloader</div>
-        <div className="panel-desc">Direct download tool for EPA dockets. Optimized for restricted network connections.</div>
+        <div className="panel-desc">Direct download tool for EPA dockets.</div>
       </div>
 
       {(isDownloading || logs.length > 0) && (
@@ -342,9 +355,15 @@ function App() {
               </label>
             </div>
 
-            <button className="btn-primary" disabled={selectedDocIds.size === 0 || isDownloading} onClick={startDownload}>
-              Download Selection ({selectedDocIds.size})
-            </button>
+            {isDownloading ? (
+              <button className="btn-primary" style={{ background: 'var(--danger)' }} onClick={stopDownload}>
+                Stop Download
+              </button>
+            ) : (
+              <button className="btn-primary" disabled={selectedDocIds.size === 0} onClick={startDownload}>
+                Download Selection ({selectedDocIds.size})
+              </button>
+            )}
           </div>
 
           <div id="epa-doc-table-wrap">
