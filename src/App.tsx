@@ -1,18 +1,28 @@
+// App.tsx — The entire application lives in this one file.
+// It handles searching EPA dockets, browsing their documents, viewing public comments,
+// and batch-downloading PDFs directly through the browser.
+
 import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
-// Interfaces based on Regulations.gov v4 OpenAPI spec
+// ---------------------------------------------------------------------------
+// TypeScript interfaces — these describe the shape of data we get back from
+// the Regulations.gov API so TypeScript can catch typos and type mismatches.
+// ---------------------------------------------------------------------------
+
+// A single regulatory document (e.g. a Notice, Rule, or supporting PDF)
 interface Document {
   id: string;
   attributes: {
     title: string;
-    documentType: string;
+    documentType: string;   // e.g. "Notice", "Rule", "Proposed Rule"
     postedDate: string;
     openForComment: boolean;
     commentEndDate: string;
   };
 }
 
+// A docket is a folder that groups related documents together (one per rulemaking)
 interface Docket {
   id: string;
   attributes: {
@@ -22,72 +32,89 @@ interface Docket {
   };
 }
 
+// Pagination info returned alongside list responses
 interface Meta {
   totalElements: number;
   totalPages: number;
 }
 
+// A public comment submitted by a member of the public on a document
 interface Comment {
   id: string;
   attributes: {
     title: string;
     postedDate: string;
-    submitterType: string;
+    submitterType: string;  // e.g. "Individual", "Organization"
   };
 }
 
+// Base URL for all API requests — every fetch call starts with this
 const API_BASE = "https://api.regulations.gov/v4";
 
+// ---------------------------------------------------------------------------
+// Main App component — React components are just functions that return HTML-like JSX
+// ---------------------------------------------------------------------------
 function App() {
+  // --- Authentication ---
+  // Load the API key from localStorage on startup so users don't re-enter it every visit
   const [apiKey, setApiKey] = useState(localStorage.getItem('reg_gov_api_key') || '');
   const [searchTerm, setSearchTerm] = useState('');
-  
-  // Data States
-  const [dockets, setDockets] = useState<Docket[]>([]);
-  const [activeDocket, setActiveDocket] = useState<Docket | null>(null);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [docMeta, setDocMeta] = useState<Meta | null>(null);
-  
-  // Table Controls (Server-side)
+
+  // --- Data returned from the API ---
+  const [dockets, setDockets] = useState<Docket[]>([]);           // Search results list
+  const [activeDocket, setActiveDocket] = useState<Docket | null>(null); // Currently selected docket
+  const [documents, setDocuments] = useState<Document[]>([]);     // Documents in the active docket
+  const [docMeta, setDocMeta] = useState<Meta | null>(null);      // Pagination info for the document table
+
+  // --- Table controls (all filters/sort are applied server-side by the API) ---
   const [page, setPage] = useState(1);
-  const pageSize = 50; 
+  const pageSize = 50;  // How many documents to fetch per page
   const [typeFilter, setTypeFilter] = useState('');
-  const [dateFilter, setDateFilter] = useState(''); 
+  const [dateFilter, setDateFilter] = useState('');   // Number of days to look back (e.g. "30", "90")
   const [onlyOpenForComment, setOnlyOpenForComment] = useState(false);
+  // sortConfig tracks which column to sort by and in which direction
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'postedDate', direction: 'desc' });
-  
-  // Interaction States
-  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
+
+  // --- UI interaction states ---
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set()); // Checkboxes
   const [isSearching, setIsSearching] = useState(false);
   const [isFetchingDocs, setIsFetchingDocs] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  
-  // Stop Download Flag
+
+  // useRef stores a value that persists across renders but doesn't trigger a re-render when changed.
+  // We use it here as a flag that the download loop can check to know when to stop.
   const stopDownloadRef = React.useRef(false);
-  
-  // Comments Feature States
-  const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
+
+  // --- Public comments ---
+  const [expandedDocId, setExpandedDocId] = useState<string | null>(null); // Which row has comments open
   const [docComments, setDocComments] = useState<Comment[]>([]);
   const [isFetchingComments, setIsFetchingComments] = useState(false);
 
-  // Download States
+  // --- Download progress ---
   const [isDownloading, setIsDownloading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState(0);           // 0–100 for the progress bar
   const [progressStatus, setProgressStatus] = useState('');
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logs, setLogs] = useState<string[]>([]);        // Timestamped log lines shown in the console panel
 
+  // Helper to append a new timestamped line to the log panel
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
-  // Save API key
+  // Whenever apiKey changes, save it to localStorage so it persists on refresh
   useEffect(() => {
     localStorage.setItem('reg_gov_api_key', apiKey);
   }, [apiKey]);
 
+  // ---------------------------------------------------------------------------
+  // fetchDocuments — Loads the document list for the selected docket.
+  // All filtering and sorting happens on the API side (we just pass query params).
+  // useCallback prevents this function from being recreated on every render,
+  // which matters because it's listed as a dependency of the useEffect below.
+  // ---------------------------------------------------------------------------
   const fetchDocuments = useCallback(async (
-    docketId: string, 
-    pageNum: number, 
-    sort: typeof sortConfig, 
-    filterType: string, 
+    docketId: string,
+    pageNum: number,
+    sort: typeof sortConfig,
+    filterType: string,
     filterDate: string,
     isOpen: boolean
   ) => {
@@ -95,58 +122,69 @@ function App() {
     setIsFetchingDocs(true);
     setErrorMsg('');
     try {
+      // The API sorts descending with a "-" prefix on the field name
       const sortStr = sort.direction === 'desc' ? `-${sort.key}` : sort.key;
       let url = `${API_BASE}/documents?filter[docketId]=${docketId}&page[size]=${pageSize}&page[number]=${pageNum}&sort=${sortStr}`;
-      
+
       if (filterType) url += `&filter[documentType]=${encodeURIComponent(filterType)}`;
       if (isOpen) url += `&filter[withinCommentPeriod]=true`;
-      
+
       if (filterDate) {
+        // Calculate a cutoff date by subtracting the selected number of days from today
         const date = new Date();
         date.setDate(date.getDate() - parseInt(filterDate));
-        const dateStr = date.toISOString().split('T')[0];
+        const dateStr = date.toISOString().split('T')[0]; // Format as YYYY-MM-DD
         url += `&filter[postedDate][ge]=${dateStr}`;
         addLog(`[i] Applying date filter: Since ${dateStr}`);
       }
 
       const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-      
+
       const data = await resp.json();
       setDocuments(data.data || []);
       setDocMeta(data.meta || null);
     } catch (e: any) {
       setErrorMsg(`Failed to fetch documents: ${e.message}`);
     } finally {
+      // finally always runs — ensures the loading spinner turns off even on error
       setIsFetchingDocs(false);
     }
   }, [apiKey, sortConfig]);
 
+  // Re-fetch documents whenever any filter, sort, or page changes
   useEffect(() => {
     if (activeDocket) {
       fetchDocuments(activeDocket.id, page, sortConfig, typeFilter, dateFilter, onlyOpenForComment);
     }
   }, [page, sortConfig, typeFilter, dateFilter, onlyOpenForComment, activeDocket, fetchDocuments]);
 
+  // ---------------------------------------------------------------------------
+  // searchDockets — Searches for EPA dockets by name or direct ID.
+  // If the search term looks like a docket ID (starts with "EPA-" or "OPP-"),
+  // we fetch it directly instead of doing a keyword search.
+  // ---------------------------------------------------------------------------
   const searchDockets = async () => {
     if (!apiKey) return setErrorMsg("Please enter an API Key first.");
     setIsSearching(true);
     setErrorMsg('');
+    // Clear previous results before starting a new search
     setDockets([]);
     setActiveDocket(null);
     setDocuments([]);
     setDocMeta(null);
     setSelectedDocIds(new Set());
-    
+
     try {
       const isId = searchTerm.toUpperCase().startsWith("EPA-") || searchTerm.toUpperCase().startsWith("OPP-");
       let url = `${API_BASE}/dockets?filter[agencyId]=EPA&filter[searchTerm]=${searchTerm}&page[size]=20&sort=-lastModifiedDate`;
-      if (isId) url = `${API_BASE}/dockets/${searchTerm}`;
+      if (isId) url = `${API_BASE}/dockets/${searchTerm}`; // Direct ID lookup — faster and exact
 
       const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-      
+
       const data = await resp.json();
+      // Direct ID lookup returns a single object; keyword search returns an array
       const results = isId ? [data.data] : (data.data || []);
       setDockets(results);
       if (results.length === 0) setErrorMsg("No dockets found matching that search.");
@@ -157,7 +195,12 @@ function App() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // fetchComments — Loads public comments for a document row.
+  // Clicking the button a second time collapses the comments panel.
+  // ---------------------------------------------------------------------------
   const fetchComments = async (docId: string) => {
+    // Toggle: if this doc's comments are already open, close them
     if (expandedDocId === docId) {
       setExpandedDocId(null);
       return;
@@ -179,31 +222,45 @@ function App() {
     }
   };
 
+  // Toggle sort direction when clicking a column header.
+  // If clicking the same column again, flip direction; otherwise default to ascending.
   const requestSort = (key: string) => {
     setSortConfig(prev => ({
       key,
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
     }));
-    setPage(1);
+    setPage(1); // Reset to first page whenever sort changes
   };
 
+  // Set the stop flag — the download loop checks this on each iteration
   const stopDownload = () => {
     stopDownloadRef.current = true;
     addLog("[!] Stop request received. Terminating queue...");
   };
 
+  // ---------------------------------------------------------------------------
+  // triggerDirectDownload — Creates a temporary invisible link and clicks it,
+  // which tells the browser to download the file at that URL.
+  // This avoids having to proxy the file through our own server.
+  // ---------------------------------------------------------------------------
   const triggerDirectDownload = (url: string) => {
     const link = document.createElement('a');
     link.href = url;
     link.target = '_blank';
-    link.rel = 'noopener noreferrer';
+    link.rel = 'noopener noreferrer'; // Security best practice for target="_blank"
     document.body.appendChild(link);
     link.click();
+    // Clean up the element after a short delay to let the browser register the click
     setTimeout(() => { if (document.body.contains(link)) document.body.removeChild(link); }, 1000);
   };
 
+  // ---------------------------------------------------------------------------
+  // startDownload — Loops through every selected document ID, fetches its
+  // attachment metadata, then triggers a browser download for each PDF found.
+  // A 1.2s delay between downloads prevents the browser from blocking them.
+  // ---------------------------------------------------------------------------
   const startDownload = async () => {
-    stopDownloadRef.current = false;
+    stopDownloadRef.current = false; // Clear any previous stop signal
     setIsDownloading(true);
     setProgress(0);
     setLogs([]);
@@ -215,6 +272,7 @@ function App() {
     let ok = 0, fail = 0;
 
     for (let i = 0; i < ids.length; i++) {
+      // Check the stop flag before processing each document
       if (stopDownloadRef.current) {
         addLog("[!] Download process stopped by user.");
         break;
@@ -224,12 +282,14 @@ function App() {
       addLog(`Fetching details for ${id}...`);
 
       try {
+        // Fetch full document details including any file attachments
         const resp = await fetch(`${API_BASE}/documents/${id}?include=attachments`, {
           headers: { 'X-Api-Key': apiKey }
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
-        
+
+        // Collect all PDF URLs from both the main document and its attachments
         const files: {url: string, label: string}[] = [];
         const extract = (attrs: any, prefix: string) => {
           (attrs.fileFormats || []).forEach((ff: any) => {
@@ -240,6 +300,7 @@ function App() {
         };
 
         extract(data.data.attributes, id);
+        // "included" contains the attachment objects when ?include=attachments is used
         (data.included || []).forEach((inc: any, idx: number) => {
           extract(inc.attributes, `${id}__att${idx + 1}`);
         });
@@ -250,7 +311,7 @@ function App() {
             triggerDirectDownload(f.url);
             addLog(`    [✓] Requested: ${f.label}.pdf`);
             ok++;
-            // Necessary delay to prevent browser download manager from blocking
+            // Delay between downloads — without this, browsers silently drop rapid-fire downloads
             await new Promise(r => setTimeout(r, 1200));
           }
         } else {
@@ -260,6 +321,7 @@ function App() {
         addLog(`  [!] ERROR fetching ${id}: ${e.message}`);
         fail++;
       }
+      // Update the progress bar as a percentage of total documents processed
       setProgress(((i + 1) / ids.length) * 100);
     }
 
@@ -270,8 +332,13 @@ function App() {
     addLog("==================================================");
   };
 
+  // ---------------------------------------------------------------------------
+  // JSX — This is what actually renders to the screen.
+  // It looks like HTML but it's JavaScript under the hood.
+  // ---------------------------------------------------------------------------
   return (
     <div className="admin-panel">
+      {/* API key input — stored in localStorage so it survives page refreshes */}
       <div className="api-key-banner">
         <div>
           <strong>API Authentication</strong>
@@ -285,6 +352,7 @@ function App() {
         <div className="panel-desc">Direct download tool for EPA dockets.</div>
       </div>
 
+      {/* Progress console — only shown once a download has started or completed */}
       {(isDownloading || logs.length > 0) && (
         <div id="epa-progress-wrap">
           <div className="admin-section-label">Console Output</div>
@@ -296,17 +364,21 @@ function App() {
         </div>
       )}
 
+      {/* Error banner — shown whenever an API call fails */}
       {errorMsg && <div className="alert-error">{errorMsg}</div>}
 
+      {/* Search bar — pressing Enter or clicking the button triggers searchDockets() */}
       <div className="epa-search-row">
         <input id="epa-search-input" type="text" placeholder="Pesticide Name or Docket ID" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchDockets()} />
         <button className="btn-primary" onClick={searchDockets} disabled={isSearching}>{isSearching ? 'Searching...' : 'Search Dockets'}</button>
       </div>
 
+      {/* Docket list — rendered only after a search returns results */}
       {dockets.length > 0 && (
         <div id="epa-docket-list">
           <div className="admin-section-label">Matching Dockets (Recent First)</div>
           {dockets.map(d => (
+            // Clicking a docket sets it as active and resets to page 1
             <div key={d.id} className={`docket-item ${activeDocket?.id === d.id ? 'active' : ''}`} onClick={() => {setActiveDocket(d); setPage(1);}}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                 <strong>{d.id}</strong>
@@ -320,6 +392,7 @@ function App() {
         </div>
       )}
 
+      {/* Document table — only shown after a docket is selected */}
       {activeDocket && (
         <div>
           <div className="admin-section-label">
@@ -327,13 +400,14 @@ function App() {
             {docMeta && <span className="label-aside">{docMeta.totalElements} total</span>}
           </div>
 
+          {/* Toolbar: select-all checkbox, filters, and the download/stop button */}
           <div className="epa-doc-toolbar">
             <div className="toolbar-group">
               <label style={{display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem'}}>
-                <input type="checkbox" onChange={e => setSelectedDocIds(e.target.checked ? new Set(documents.map(d => d.id)) : new Set())} checked={documents.length > 0 && documents.every(d => selectedDocIds.has(d.id))} /> 
+                <input type="checkbox" onChange={e => setSelectedDocIds(e.target.checked ? new Set(documents.map(d => d.id)) : new Set())} checked={documents.length > 0 && documents.every(d => selectedDocIds.has(d.id))} />
                 Select All
               </label>
-              
+
               <select value={typeFilter} onChange={e => { setPage(1); setTypeFilter(e.target.value); }}>
                 <option value="">All Types</option>
                 <option value="Supporting & Related Material">Supporting & Related Material</option>
@@ -355,6 +429,7 @@ function App() {
               </label>
             </div>
 
+            {/* While downloading: show Stop button. Otherwise: show Download button. */}
             {isDownloading ? (
               <button className="btn-primary" style={{ background: 'var(--danger)' }} onClick={stopDownload}>
                 Stop Download
@@ -371,6 +446,7 @@ function App() {
               <thead>
                 <tr>
                   <th style={{ width: '40px' }}></th>
+                  {/* Clickable column headers trigger requestSort() */}
                   <th style={{ width: '180px', cursor: 'pointer' }} onClick={() => requestSort('documentId')}>
                     Document ID {sortConfig.key === 'documentId' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
                   </th>
@@ -388,6 +464,8 @@ function App() {
                 {isFetchingDocs ? (
                   <tr><td colSpan={6} style={{textAlign: 'center', padding: '3rem'}}>Loading...</td></tr>
                 ) : (
+                  // React.Fragment lets us render two <tr> rows per document (the row + comments row)
+                  // without adding an extra wrapper element to the DOM
                   documents.map(doc => (
                     <React.Fragment key={doc.id}>
                       <tr>
@@ -396,6 +474,7 @@ function App() {
                         <td><span className={`badge badge-${doc.attributes.documentType.replace(/\s+/g, '')}`}>{doc.attributes.documentType}</span></td>
                         <td>
                           {doc.attributes.title}
+                          {/* Pulsing badge only appears if the comment period is currently open */}
                           {doc.attributes.openForComment && (
                             <div className="pulsing-badge">
                               ● Open for Comment until {new Date(doc.attributes.commentEndDate).toLocaleDateString()}
@@ -409,6 +488,7 @@ function App() {
                           </button>
                         </td>
                       </tr>
+                      {/* Comments expansion row — only rendered for the currently expanded document */}
                       {expandedDocId === doc.id && (
                         <tr className="comments-row">
                           <td colSpan={6}>
@@ -440,6 +520,7 @@ function App() {
             </table>
           </div>
 
+          {/* Pagination — only shown if there's more than one page of results */}
           {docMeta && docMeta.totalPages > 1 && (
             <div className="pagination-controls">
               <span>Page {page} of {docMeta.totalPages}</span>

@@ -52,4 +52,4 @@ This app is pre-configured for **Vercel**. Simply connect your GitHub repository
 
 ## 📄 License
 
-Internal Use / MIT - Developed for EPA Regulatory Data Pipelines.
+MIT License. See `LICENSE` for details.
