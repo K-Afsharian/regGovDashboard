@@ -392,6 +392,29 @@ function App() {
 
     let okFiles = 0, failed = 0, matchedDocs = 0;
 
+    // Throttled fetch: paces API calls and retries on HTTP 429 using
+    // Retry-After when the server provides one. The regulations.gov API
+    // limits to ~1000 requests/hour; without this we burn through the
+    // budget in seconds on a multi-AI run.
+    const API_REQUEST_DELAY_MS = 250;
+    const apiFetch = async (url: string): Promise<Response> => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (stopDownloadRef.current) throw new Error('stopped');
+        await new Promise(r => setTimeout(r, API_REQUEST_DELAY_MS));
+        const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
+        if (resp.status !== 429) return resp;
+        const retryAfter = parseInt(resp.headers.get('Retry-After') || '') || 60;
+        const waitMs = Math.min(retryAfter, 120) * 1000;
+        addLog(`  [!] Rate-limited (HTTP 429). Waiting ${Math.round(waitMs / 1000)}s before retry...`);
+        const startWait = Date.now();
+        while (Date.now() - startWait < waitMs) {
+          if (stopDownloadRef.current) throw new Error('stopped');
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+      throw new Error('HTTP 429 after retries');
+    };
+
     aiLoop: for (let a = 0; a < ais.length; a++) {
       if (stopDownloadRef.current) { addLog("[!] Stopped by user."); break; }
       const ai = ais[a];
@@ -405,7 +428,7 @@ function App() {
         const url = isId
           ? `${API_BASE}/dockets/${encodeURIComponent(ai)}`
           : `${API_BASE}/dockets?filter[agencyId]=EPA&filter[searchTerm]=${encodeURIComponent(ai)}&page[size]=20&sort=-lastModifiedDate`;
-        const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
+        const resp = await apiFetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         dockets = isId ? [data.data] : (data.data || []);
@@ -431,7 +454,7 @@ function App() {
           while (true) {
             if (stopDownloadRef.current) break aiLoop;
             const url = `${API_BASE}/documents?filter[docketId]=${encodeURIComponent(docket.id)}&page[size]=250&page[number]=${pageNum}&sort=-postedDate`;
-            const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
+            const resp = await apiFetch(url);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             const batch: Document[] = data.data || [];
@@ -461,9 +484,7 @@ function App() {
           if (stopDownloadRef.current) break aiLoop;
           const doc = matches[i];
           try {
-            const resp = await fetch(`${API_BASE}/documents/${doc.id}?include=attachments`, {
-              headers: { 'X-Api-Key': apiKey }
-            });
+            const resp = await apiFetch(`${API_BASE}/documents/${doc.id}?include=attachments`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
 
