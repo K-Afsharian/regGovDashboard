@@ -100,6 +100,7 @@ function App() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkAis, setBulkAis] = useState('');
   const [bulkKeywords, setBulkKeywords] = useState('');
+  const [bulkExcludeKeywords, setBulkExcludeKeywords] = useState('');
   const [bulkDocketsPerAi, setBulkDocketsPerAi] = useState(1); // How many top dockets to process per AI
   const [bulkDownloadIntervalMs, setBulkDownloadIntervalMs] = useState(1500); // Delay between firing each browser download
 
@@ -357,6 +358,7 @@ function App() {
 
     const ais = bulkAis.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
     const keywords = bulkKeywords.split(/\r?\n|,/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const excludeKeywords = bulkExcludeKeywords.split(/\r?\n|,/).map(s => s.trim().toLowerCase()).filter(Boolean);
 
     if (ais.length === 0) return setErrorMsg("Add at least one active ingredient.");
     if (keywords.length === 0) return setErrorMsg("Add at least one keyword.");
@@ -444,10 +446,12 @@ function App() {
           continue;
         }
 
-        // Filter by keyword (case-insensitive substring on title)
+        // Filter: title must contain at least one include keyword AND none of the exclude keywords
         const matches = allDocs.filter(d => {
           const t = (d.attributes.title || '').toLowerCase();
-          return keywords.some(k => t.includes(k));
+          if (!keywords.some(k => t.includes(k))) return false;
+          if (excludeKeywords.some(k => t.includes(k))) return false;
+          return true;
         });
         addLog(`    ${allDocs.length} docs scanned → ${matches.length} keyword match(es).`);
         matchedDocs += matches.length;
@@ -538,7 +542,7 @@ function App() {
 
         {bulkOpen && (
           <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.75rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
               <div>
                 <div className="admin-section-label">Active Ingredients (one per line, or comma-separated)</div>
                 <textarea
@@ -550,11 +554,21 @@ function App() {
                 />
               </div>
               <div>
-                <div className="admin-section-label">Document Keywords (matched in document titles)</div>
+                <div className="admin-section-label">Include Keywords (title must contain at least one)</div>
                 <textarea
                   value={bulkKeywords}
                   onChange={e => setBulkKeywords(e.target.value)}
-                  placeholder={"human health risk assessment\necological risk assessment"}
+                  placeholder={"human health risk assessment\nHHRA"}
+                  rows={6}
+                  style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                />
+              </div>
+              <div>
+                <div className="admin-section-label">Exclude Keywords (title must contain none)</div>
+                <textarea
+                  value={bulkExcludeKeywords}
+                  onChange={e => setBulkExcludeKeywords(e.target.value)}
+                  placeholder={"scoping\ndraft"}
                   rows={6}
                   style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.85rem' }}
                 />
@@ -595,7 +609,7 @@ function App() {
                 </button>
               )}
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Matches keywords as case-insensitive substrings of the document title.
+                Keywords match as case-insensitive substrings of the document title. Include = at least one must match; Exclude = none may match.
               </span>
             </div>
           </div>
