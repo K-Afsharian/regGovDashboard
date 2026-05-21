@@ -356,7 +356,7 @@ function App() {
   const runBulkDownload = async () => {
     if (!apiKey) return setErrorMsg("Please enter an API Key first.");
 
-    const ais = bulkAis.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+    const ais = bulkAis.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const keywords = bulkKeywords.split(/\r?\n|,/).map(s => s.trim().toLowerCase()).filter(Boolean);
     const excludeKeywords = bulkExcludeKeywords.split(/\r?\n|,/).map(s => s.trim().toLowerCase()).filter(Boolean);
 
@@ -565,7 +565,7 @@ function App() {
           <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.75rem' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
               <div>
-                <div className="admin-section-label">Active Ingredients (one per line, or comma-separated)</div>
+                <div className="admin-section-label">Active Ingredients (one per line)</div>
                 <textarea
                   value={bulkAis}
                   onChange={e => setBulkAis(e.target.value)}
