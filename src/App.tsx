@@ -96,6 +96,12 @@ function App() {
   const [progressStatus, setProgressStatus] = useState('');
   const [logs, setLogs] = useState<string[]>([]);        // Timestamped log lines shown in the console panel
 
+  // --- Bulk download (AI list + keyword list) ---
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkAis, setBulkAis] = useState('');
+  const [bulkKeywords, setBulkKeywords] = useState('');
+  const [bulkDocketsPerAi, setBulkDocketsPerAi] = useState(1); // How many top dockets to process per AI
+
   // Helper to append a new timestamped line to the log panel
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
@@ -333,6 +339,143 @@ function App() {
   };
 
   // ---------------------------------------------------------------------------
+  // runBulkDownload — Automated pipeline:
+  //   For each AI name → search dockets → take the top N most-recent → fetch
+  //   every document page → keep docs whose title matches any keyword →
+  //   download every PDF attachment.
+  // ---------------------------------------------------------------------------
+  const runBulkDownload = async () => {
+    if (!apiKey) return setErrorMsg("Please enter an API Key first.");
+
+    const ais = bulkAis.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+    const keywords = bulkKeywords.split(/\r?\n|,/).map(s => s.trim().toLowerCase()).filter(Boolean);
+
+    if (ais.length === 0) return setErrorMsg("Add at least one active ingredient.");
+    if (keywords.length === 0) return setErrorMsg("Add at least one keyword.");
+
+    setErrorMsg('');
+    stopDownloadRef.current = false;
+    setIsDownloading(true);
+    setLogs([]);
+    setProgress(0);
+    addLog(`Bulk run: ${ais.length} AI(s) × ${keywords.length} keyword(s). Top ${bulkDocketsPerAi} docket(s) per AI.`);
+    addLog(`[!] Note: Ensure browser popups are allowed for this site.`);
+
+    let okFiles = 0, failed = 0, matchedDocs = 0;
+
+    aiLoop: for (let a = 0; a < ais.length; a++) {
+      if (stopDownloadRef.current) { addLog("[!] Stopped by user."); break; }
+      const ai = ais[a];
+      setProgressStatus(`AI ${a + 1}/${ais.length}: ${ai}`);
+      addLog(`\n=== ${ai} ===`);
+
+      // Search dockets for this AI
+      let dockets: Docket[] = [];
+      try {
+        const isId = ai.toUpperCase().startsWith("EPA-") || ai.toUpperCase().startsWith("OPP-");
+        const url = isId
+          ? `${API_BASE}/dockets/${encodeURIComponent(ai)}`
+          : `${API_BASE}/dockets?filter[agencyId]=EPA&filter[searchTerm]=${encodeURIComponent(ai)}&page[size]=20&sort=-lastModifiedDate`;
+        const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        dockets = isId ? [data.data] : (data.data || []);
+      } catch (e: any) {
+        addLog(`  [!] Docket search failed: ${e.message}`);
+        failed++;
+        continue;
+      }
+
+      if (dockets.length === 0) { addLog(`  → No dockets found.`); continue; }
+
+      const picked = dockets.slice(0, bulkDocketsPerAi);
+      addLog(`  Found ${dockets.length} docket(s); processing top ${picked.length}.`);
+
+      for (const docket of picked) {
+        if (stopDownloadRef.current) break aiLoop;
+        addLog(`  • Docket ${docket.id} — ${docket.attributes.title}`);
+
+        // Fetch every page of documents in this docket
+        const allDocs: Document[] = [];
+        try {
+          let pageNum = 1;
+          while (true) {
+            if (stopDownloadRef.current) break aiLoop;
+            const url = `${API_BASE}/documents?filter[docketId]=${encodeURIComponent(docket.id)}&page[size]=250&page[number]=${pageNum}&sort=-postedDate`;
+            const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            const batch: Document[] = data.data || [];
+            allDocs.push(...batch);
+            const totalPages: number = data.meta?.totalPages || 1;
+            if (pageNum >= totalPages || batch.length === 0) break;
+            pageNum++;
+          }
+        } catch (e: any) {
+          addLog(`    [!] Document list failed: ${e.message}`);
+          failed++;
+          continue;
+        }
+
+        // Filter by keyword (case-insensitive substring on title)
+        const matches = allDocs.filter(d => {
+          const t = (d.attributes.title || '').toLowerCase();
+          return keywords.some(k => t.includes(k));
+        });
+        addLog(`    ${allDocs.length} docs scanned → ${matches.length} keyword match(es).`);
+        matchedDocs += matches.length;
+
+        // Download PDFs for each matched doc
+        for (let i = 0; i < matches.length; i++) {
+          if (stopDownloadRef.current) break aiLoop;
+          const doc = matches[i];
+          try {
+            const resp = await fetch(`${API_BASE}/documents/${doc.id}?include=attachments`, {
+              headers: { 'X-Api-Key': apiKey }
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+
+            const files: { url: string, label: string }[] = [];
+            const extract = (attrs: any, prefix: string) => {
+              (attrs.fileFormats || []).forEach((ff: any) => {
+                if (ff.format?.toLowerCase() === 'pdf') files.push({ url: ff.fileUrl, label: prefix });
+              });
+            };
+            extract(data.data.attributes, doc.id);
+            (data.included || []).forEach((inc: any, idx: number) => {
+              extract(inc.attributes, `${doc.id}__att${idx + 1}`);
+            });
+
+            if (files.length === 0) {
+              addLog(`      → ${doc.id}: no PDF.`);
+              continue;
+            }
+            addLog(`      → ${doc.id}: downloading ${files.length} PDF(s) — "${doc.attributes.title.slice(0, 80)}"`);
+            for (const f of files) {
+              if (stopDownloadRef.current) break aiLoop;
+              triggerDirectDownload(f.url);
+              okFiles++;
+              await new Promise(r => setTimeout(r, 1200));
+            }
+          } catch (e: any) {
+            addLog(`      [!] ${doc.id} failed: ${e.message}`);
+            failed++;
+          }
+        }
+      }
+
+      setProgress(((a + 1) / ais.length) * 100);
+    }
+
+    setIsDownloading(false);
+    setProgressStatus('Finished');
+    addLog("==================================================");
+    addLog(`  Bulk done.  Matched docs: ${matchedDocs}  |  Files: ${okFiles}  |  Errors: ${failed}`);
+    addLog("==================================================");
+  };
+
+  // ---------------------------------------------------------------------------
   // JSX — This is what actually renders to the screen.
   // It looks like HTML but it's JavaScript under the hood.
   // ---------------------------------------------------------------------------
@@ -350,6 +493,70 @@ function App() {
       <div className="panel-hdr">
         <div className="panel-title">EPA Docket Downloader</div>
         <div className="panel-desc">Direct download tool for EPA dockets.</div>
+      </div>
+
+      {/* Bulk download — paste an AI list and a keyword list, run once. */}
+      <div style={{ border: '1px solid var(--border, #ccc)', borderRadius: 6, padding: '0.75rem 1rem', margin: '0.75rem 0' }}>
+        <div
+          style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          onClick={() => setBulkOpen(o => !o)}
+        >
+          <strong>Bulk Download (AI list × Keyword list)</strong>
+          <span>{bulkOpen ? '▾' : '▸'}</span>
+        </div>
+
+        {bulkOpen && (
+          <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div>
+                <div className="admin-section-label">Active Ingredients (one per line, or comma-separated)</div>
+                <textarea
+                  value={bulkAis}
+                  onChange={e => setBulkAis(e.target.value)}
+                  placeholder={"glyphosate\natrazine\n2,4-D"}
+                  rows={6}
+                  style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                />
+              </div>
+              <div>
+                <div className="admin-section-label">Document Keywords (matched in document titles)</div>
+                <textarea
+                  value={bulkKeywords}
+                  onChange={e => setBulkKeywords(e.target.value)}
+                  placeholder={"human health risk assessment\necological risk assessment"}
+                  rows={6}
+                  style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                Top dockets per AI:
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={bulkDocketsPerAi}
+                  onChange={e => setBulkDocketsPerAi(Math.max(1, parseInt(e.target.value) || 1))}
+                  style={{ width: 60 }}
+                />
+              </label>
+              {isDownloading ? (
+                <button className="btn-primary" style={{ background: 'var(--danger)' }} onClick={stopDownload}>
+                  Stop
+                </button>
+              ) : (
+                <button className="btn-primary" onClick={runBulkDownload}>
+                  Run Bulk Download
+                </button>
+              )}
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                Matches keywords as case-insensitive substrings of the document title.
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Progress console — only shown once a download has started or completed */}
