@@ -101,6 +101,12 @@ function App() {
   const [bulkAis, setBulkAis] = useState('');
   const [bulkKeywords, setBulkKeywords] = useState('');
   const [bulkDocketsPerAi, setBulkDocketsPerAi] = useState(1); // How many top dockets to process per AI
+  const [bulkDownloadIntervalMs, setBulkDownloadIntervalMs] = useState(1500); // Delay between firing each browser download
+
+  // Producer/consumer queue: discovery pushes URLs in, the drainer pulls them
+  // out and triggers a browser download every `bulkDownloadIntervalMs` ms.
+  const downloadQueueRef = React.useRef<string[]>([]);
+  const discoveryDoneRef = React.useRef(false);
 
   // Helper to append a new timestamped line to the log panel
   const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -252,11 +258,13 @@ function App() {
   const triggerDirectDownload = (url: string) => {
     const link = document.createElement('a');
     link.href = url;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer'; // Security best practice for target="_blank"
+    // `download` hints to the browser to save instead of navigate. Cross-origin
+    // servers can ignore it, but regulations.gov serves PDFs with
+    // Content-Disposition: attachment, so the browser will save them.
+    link.download = '';
+    link.rel = 'noopener noreferrer';
     document.body.appendChild(link);
     link.click();
-    // Clean up the element after a short delay to let the browser register the click
     setTimeout(() => { if (document.body.contains(link)) document.body.removeChild(link); }, 1000);
   };
 
@@ -355,11 +363,30 @@ function App() {
 
     setErrorMsg('');
     stopDownloadRef.current = false;
+    discoveryDoneRef.current = false;
+    downloadQueueRef.current = [];
     setIsDownloading(true);
     setLogs([]);
     setProgress(0);
     addLog(`Bulk run: ${ais.length} AI(s) × ${keywords.length} keyword(s). Top ${bulkDocketsPerAi} docket(s) per AI.`);
-    addLog(`[!] Note: Ensure browser popups are allowed for this site.`);
+    addLog(`[!] Note: Ensure browser popups + automatic downloads are allowed for this site.`);
+    addLog(`Download pacing: 1 file every ${bulkDownloadIntervalMs}ms.`);
+
+    // Start the drainer: pulls URLs out of the queue and fires one download
+    // every `bulkDownloadIntervalMs` ms. Runs concurrently with discovery.
+    const drainer = (async () => {
+      while (true) {
+        if (stopDownloadRef.current) { downloadQueueRef.current = []; return; }
+        const url = downloadQueueRef.current.shift();
+        if (url) {
+          triggerDirectDownload(url);
+          await new Promise(r => setTimeout(r, bulkDownloadIntervalMs));
+        } else {
+          if (discoveryDoneRef.current) return;
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+    })();
 
     let okFiles = 0, failed = 0, matchedDocs = 0;
 
@@ -451,12 +478,11 @@ function App() {
               addLog(`      → ${doc.id}: no PDF.`);
               continue;
             }
-            addLog(`      → ${doc.id}: downloading ${files.length} PDF(s) — "${doc.attributes.title.slice(0, 80)}"`);
+            addLog(`      → ${doc.id}: queued ${files.length} PDF(s) — "${doc.attributes.title.slice(0, 80)}"`);
             for (const f of files) {
               if (stopDownloadRef.current) break aiLoop;
-              triggerDirectDownload(f.url);
+              downloadQueueRef.current.push(f.url);
               okFiles++;
-              await new Promise(r => setTimeout(r, 1200));
             }
           } catch (e: any) {
             addLog(`      [!] ${doc.id} failed: ${e.message}`);
@@ -467,6 +493,11 @@ function App() {
 
       setProgress(((a + 1) / ais.length) * 100);
     }
+
+    discoveryDoneRef.current = true;
+    addLog(`Discovery finished. Draining ${downloadQueueRef.current.length} queued download(s)...`);
+    setProgressStatus('Draining download queue...');
+    await drainer;
 
     setIsDownloading(false);
     setProgressStatus('Finished');
@@ -540,6 +571,18 @@ function App() {
                   value={bulkDocketsPerAi}
                   onChange={e => setBulkDocketsPerAi(Math.max(1, parseInt(e.target.value) || 1))}
                   style={{ width: 60 }}
+                />
+              </label>
+              <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                Download interval (ms):
+                <input
+                  type="number"
+                  min={100}
+                  max={10000}
+                  step={100}
+                  value={bulkDownloadIntervalMs}
+                  onChange={e => setBulkDownloadIntervalMs(Math.max(100, parseInt(e.target.value) || 1500))}
+                  style={{ width: 80 }}
                 />
               </label>
               {isDownloading ? (
