@@ -52,6 +52,22 @@ interface Comment {
 const API_BASE = "https://api.regulations.gov/v4";
 
 // ---------------------------------------------------------------------------
+// apiUrl — Builds a regulations.gov URL with properly percent-encoded query
+// params. The /documents and /comments endpoints reject raw "[" / "]" in the
+// query string with an HTTP 400, so JSON:API keys like "filter[docketId]" must
+// be encoded (URLSearchParams turns them into "filter%5BdocketId%5D"). The
+// /dockets endpoint tolerates raw brackets, but encoding everywhere is safe.
+// Params with empty-string/undefined values are skipped.
+// ---------------------------------------------------------------------------
+const apiUrl = (path: string, params: Record<string, string | number | undefined>) => {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') qs.append(key, String(value));
+  }
+  return `${API_BASE}${path}?${qs.toString()}`;
+};
+
+// ---------------------------------------------------------------------------
 // Main App component — React components are just functions that return HTML-like JSX
 // ---------------------------------------------------------------------------
 function App() {
@@ -137,22 +153,32 @@ function App() {
     try {
       // The API sorts descending with a "-" prefix on the field name
       const sortStr = sort.direction === 'desc' ? `-${sort.key}` : sort.key;
-      let url = `${API_BASE}/documents?filter[docketId]=${docketId}&page[size]=${pageSize}&page[number]=${pageNum}&sort=${sortStr}`;
 
-      if (filterType) url += `&filter[documentType]=${encodeURIComponent(filterType)}`;
-      if (isOpen) url += `&filter[withinCommentPeriod]=true`;
-
+      let dateStr = '';
       if (filterDate) {
         // Calculate a cutoff date by subtracting the selected number of days from today
         const date = new Date();
         date.setDate(date.getDate() - parseInt(filterDate));
-        const dateStr = date.toISOString().split('T')[0]; // Format as YYYY-MM-DD
-        url += `&filter[postedDate][ge]=${dateStr}`;
+        dateStr = date.toISOString().split('T')[0]; // Format as YYYY-MM-DD
         addLog(`[i] Applying date filter: Since ${dateStr}`);
       }
 
+      const url = apiUrl('/documents', {
+        'filter[docketId]': docketId,
+        'page[size]': pageSize,
+        'page[number]': pageNum,
+        'sort': sortStr,
+        'filter[documentType]': filterType || undefined,
+        'filter[withinCommentPeriod]': isOpen ? 'true' : undefined,
+        'filter[postedDate][ge]': dateStr || undefined,
+      });
+
       const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+      if (!resp.ok) {
+        // Surface the API's error detail when present — a bare status code is hard to debug
+        const detail = await resp.text().catch(() => '');
+        throw new Error(`HTTP ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+      }
 
       const data = await resp.json();
       setDocuments(data.data || []);
@@ -190,8 +216,8 @@ function App() {
 
     try {
       const isId = searchTerm.toUpperCase().startsWith("EPA-") || searchTerm.toUpperCase().startsWith("OPP-");
-      let url = `${API_BASE}/dockets?filter[agencyId]=EPA&filter[searchTerm]=${searchTerm}&page[size]=20&sort=-lastModifiedDate`;
-      if (isId) url = `${API_BASE}/dockets/${searchTerm}`; // Direct ID lookup — faster and exact
+      let url = apiUrl('/dockets', { 'filter[agencyId]': 'EPA', 'filter[searchTerm]': searchTerm, 'page[size]': 20, 'sort': '-lastModifiedDate' });
+      if (isId) url = `${API_BASE}/dockets/${encodeURIComponent(searchTerm)}`; // Direct ID lookup — faster and exact
 
       const resp = await fetch(url, { headers: { 'X-Api-Key': apiKey } });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
@@ -222,7 +248,7 @@ function App() {
     setDocComments([]);
     setIsFetchingComments(true);
     try {
-      const resp = await fetch(`${API_BASE}/comments?filter[commentOnId]=${docId}&sort=-postedDate`, {
+      const resp = await fetch(apiUrl('/comments', { 'filter[commentOnId]': docId, 'sort': '-postedDate' }), {
         headers: { 'X-Api-Key': apiKey }
       });
       if (!resp.ok) throw new Error("Failed to fetch comments");
@@ -427,7 +453,7 @@ function App() {
         const isId = ai.toUpperCase().startsWith("EPA-") || ai.toUpperCase().startsWith("OPP-");
         const url = isId
           ? `${API_BASE}/dockets/${encodeURIComponent(ai)}`
-          : `${API_BASE}/dockets?filter[agencyId]=EPA&filter[searchTerm]=${encodeURIComponent(ai)}&page[size]=20&sort=-lastModifiedDate`;
+          : apiUrl('/dockets', { 'filter[agencyId]': 'EPA', 'filter[searchTerm]': ai, 'page[size]': 20, 'sort': '-lastModifiedDate' });
         const resp = await apiFetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
@@ -453,7 +479,7 @@ function App() {
           let pageNum = 1;
           while (true) {
             if (stopDownloadRef.current) break aiLoop;
-            const url = `${API_BASE}/documents?filter[docketId]=${encodeURIComponent(docket.id)}&page[size]=250&page[number]=${pageNum}&sort=-postedDate`;
+            const url = apiUrl('/documents', { 'filter[docketId]': docket.id, 'page[size]': 250, 'page[number]': pageNum, 'sort': '-postedDate' });
             const resp = await apiFetch(url);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
