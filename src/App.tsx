@@ -495,11 +495,13 @@ function App() {
           continue;
         }
 
-        // Filter: title must contain at least one include keyword AND none of the exclude keywords
+        // Filter: title must contain at least one include keyword AND none of the exclude keywords.
+        // Multi-word keywords match if every word appears somewhere in the title (any order).
+        const allWords = (k: string) => k.split(/\s+/).filter(Boolean);
         const matches = allDocs.filter(d => {
           const t = (d.attributes.title || '').toLowerCase();
-          if (!keywords.some(k => t.includes(k))) return false;
-          if (excludeKeywords.some(k => t.includes(k))) return false;
+          if (!keywords.some(k => allWords(k).every(w => t.includes(w)))) return false;
+          if (excludeKeywords.some(k => allWords(k).every(w => t.includes(w)))) return false;
           return true;
         });
         addLog(`    ${allDocs.length} docs scanned → ${matches.length} keyword match(es).`);
@@ -656,7 +658,7 @@ function App() {
                 </button>
               )}
               <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Keywords match as case-insensitive substrings of the document title. Include = at least one must match; Exclude = none may match.
+                Keywords match case-insensitively against the document title. Multi-word terms (e.g. "human risk assessment") require all words to appear in the title in any order. Include = at least one keyword must match; Exclude = none may match.
               </span>
             </div>
           </div>
